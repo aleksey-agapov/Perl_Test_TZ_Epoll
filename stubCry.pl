@@ -1,5 +1,7 @@
 #!/perl -l
 use IO::Socket::INET;
+use Getopt::Long;
+
 sub EAGAIN() {11}
 sub TCP_KEEPIDLE() {4}
 sub TCP_KEEPINTVL() {5}
@@ -14,6 +16,7 @@ use Gzip::Faster;
 
 
 
+
 my$S;
 my%clientBuf;
 
@@ -21,6 +24,16 @@ my%sn2Rate=(
     1=>10,
     2=>25,
     3=>50);
+
+
+
+
+my $crypt = 0;
+
+GetOptions(
+        "crypt"         => \$crypt,
+);
+
 
 sub logg
 {
@@ -44,7 +57,12 @@ sub newClient
     $clientBuf{$c}=[new JSON::XS,''];
     
     logg "+client #".fileno($c)." ".inet_ntoa((sockaddr_in $c->peername())[1]);
-    send  ($c,"\r\n",0);#only small message
+#    send  ($c,"\r\n",0);#only small message
+   if ($crypt) {
+     send  ($c,gzip ("\r\n"),0);
+   } else {
+      send  ($c,"\r\n",0);
+   }
     EPW::setFDH($c,\&processClientReq,\&sendReply,\&clientErr,undef);
 }
 
@@ -169,25 +187,35 @@ sub processClientReq
     my $recv_size = sysread($c,$read_buffer,4096);
 
     	if ( (!defined($recv_size) ) || ($recv_size==0) ||  ($read_buffer eq "") ) { die  "Error Not input data!"}   # {dropClient($c); die  "Error Not input data!"}
-    	logg "recv_size: $recv_size read_buffer:$read_buffer";
+    	if ($crypt) {
+    		logg "recv_size: $recv_size";
+    	} else {
+    		logg "recv_size: $recv_size read_buffer:$read_buffer";
+    	}
 
+		my $ret0 = 1;
     	my$dt = "";
-#    	my $ret0 = eval {$dt=gunzip($read_buffer);1};
-	   	my $ret0 = eval {$dt=$read_buffer;1};
+    	
+    	if ($crypt) {
+    		$ret0 = eval {$dt=gunzip($read_buffer);1};
+    	} else {
+    		$dt=$read_buffer
+    	}
 
 		unless ($ret0) {
 			dropClient($c);
 			die  "Error to decode input data:$dt! $@";
 		}
-
-    	my @socket_record_list = split('\n', $dt);
+#    /}\s*,\s*{/
+    	my @socket_record_list = split(/\n/, $dt);
     	while (scalar (@socket_record_list) > 0) {
 	    	my $socket_stream_record = shift (@socket_record_list);
+	    	
 	    	unless (defined($socket_stream_record) && ($socket_stream_record ne "") ) {
+	    		logg "processClientReq: next:";
 	    		continue;
 	    	}
-	    	
-		    
+
 		    logg "processClientReq: read_from queue:$socket_stream_record";
 		    
 		    my $ret1 = eval{
@@ -250,7 +278,11 @@ sub sendReply
 		       logg "sendReply>$bytes";
 		    if( (length($clientBuf{$c}[1])==$bytes) || ($bytes == 0) )
 		    {
-		    	send  ($c,"\r\n",0);
+   if ($crypt) {
+     send  ($c,gzip ("\r\n"),0);
+   } else {
+      send  ($c,"\r\n",0);
+   }
 		        $clientBuf{$c}[1]="";
 		        EPW::setFDH($c,\&processClientReq,undef,\&clientErr,undef);
 		    }else
@@ -272,29 +304,40 @@ sub reply
 {
    my($c,$obj)=@_;
    my $ret_str = encode_json($obj);
-#   my$dt=gzip ($ret_str);
-   my$dt= $ret_str;
+   my $dt;
+   if ($crypt) {
+      $dt=gzip ($ret_str);
+   } else {
+      $dt= $ret_str;
+   }
    my$pref=$$obj{ans};
    logg ">c#".fileno($c)."[$pref]: $ret_str";
 
-#   if(length($clientBuf{$c}[1]))
-#   {
-#        $clientBuf{$c}[1].=$dt;
-#        logg "==> Add to send buffer:".$ret_str;
-#   }
-#   else
-#   {
-        my $bytes=send ($c,$dt, 0 );  # MSG_OOB
+   if(length($clientBuf{$c}[1]))
+   {
+        $clientBuf{$c}[1].=$dt;
+        logg "==> Add to send buffer:".$ret_str;
+   } else {
+        $clientBuf{$c}[1]=$dt;
+   }
+
+
+        my $bytes=send ($c,$clientBuf{$c}[1], 0 );  # MSG_OOB
 		if (defined($bytes) && ($bytes > 0) ) {
 	        logg "==> Send byte:" . $bytes;
-	        if($bytes<length($dt))
+	        if($bytes<length($clientBuf{$c}[1]))
 	        {
-	        	$clientBuf{$c}[1]=substr($dt,$bytes);
-		        EPW::setFDH($c,\&processClientReq,\&sendReply,\&clientErr,undef);
-	#            $clientBuf{$c}[1]=$dt;
-	#            EPW::setFDH($c,undef,\&sendReply,\&clientErr,undef); # 
+	        	$clientBuf{$c}[1]=substr($clientBuf{$c}[1],$bytes);
+		        EPW::setFDH($c,\&processClientReq,\&sendReply,\&clientErr,undef); 
 	        } else {
-	        	send  ($c,"\r\n",0);
+	        	
+   if ($crypt) {
+     send  ($c,gzip ("\r\n"),0);
+   } else {
+      send  ($c,"\r\n",0);
+   }
+	        	
+#	        	
 	        	$clientBuf{$c}[1]=''; 
 	        	EPW::setFDH($c,\&processClientReq,undef,\&clientErr,undef);
 	        }
@@ -303,9 +346,6 @@ sub reply
 			dropClient($c);
 			die "Socket close!";
 		}
-#   }
-   
-#    EPW::setFDH($c,\&processClientReq, undef,\&clientErr,undef); #
 }
 
 sub process
