@@ -10,6 +10,9 @@ use strict;
 use EPW;
 use JSON::XS;
 use utf8;
+use Gzip::Faster;
+
+
 
 my$S;
 my%clientBuf;
@@ -21,114 +24,305 @@ my%sn2Rate=(
 
 sub logg
 {
-        print O localtime()." @_";
+        print localtime()." @_";
+#        print O localtime()." @_";
 }
 
 
 sub newClient
 {
     my$c=$S->accept();
-    $c->blocking(0);
     return unless $c;
-    logg "+client #".fileno($c)." ".inet_ntoa((sockaddr_in $c->peername())[1]);
-    send $c,"\r\n",0;#only small message
+    
+   $c->blocking(1);  # 0
+	$c->autoflush(1);
+
     $c->setsockopt(IPPROTO_TCP,TCP_KEEPIDLE,100);
     $c->setsockopt(IPPROTO_TCP,TCP_KEEPINTVL,30);
     $c->setsockopt(IPPROTO_TCP,TCP_KEEPCNT,5);
     $c->setsockopt(SOL_SOCKET,SO_KEEPALIVE,1);
     $clientBuf{$c}=[new JSON::XS,''];
-    EPW::setFDH($c,\&processClientReq,undef,\&clientErr,undef);
+    
+    logg "+client #".fileno($c)." ".inet_ntoa((sockaddr_in $c->peername())[1]);
+    send  ($c,"\r\n",0);#only small message
+    EPW::setFDH($c,\&processClientReq,\&sendReply,\&clientErr,undef);
 }
 
 sub clientErr
 {
+	logg "Client error:";
     dropClient(shift);
 }
+
+
+
+sub ServerErr
+{
+    logg "Server error:";
+}
+=doc  zzzzz
+sub processClientReqZ
+{
+    my($c)=@_;
+
+    my $read_buffer = "";
+    my $input_stream = "";
+    my $rv = 0;
+    
+    my$recv_size=1; # 1
+    my $zero_count = 0;
+    
+    my @cmd_buffer = ();
+
+    while ($recv_size > 0 ) {
+    	$recv_size = sysread($c,$read_buffer,4096);
+    	logg "recv_size: $recv_size  read_buffer: $read_buffer";
+    	if (defined($recv_size) ) {
+	    	$input_stream.=$read_buffer;
+	    	$rv+=$recv_size;
+	    	if ($recv_size == 4096) {
+	    		continue;
+	    	} elsif ($recv_size == 0) {
+	    		logg "processClientReq: read:$rv byte";
+	    		last;
+	    	}
+	    	
+	    	push (@cmd_buffer, $input_stream);
+	    	logg "processClientReq: read:$rv byte";
+	    	$input_stream = "";
+    	} else {
+    		logg "processClientReq: socket error. read_size: $rv";
+    		last;
+    	}
+    }
+
+    if($rv==0) {dropClient($c); die  "Error Not input data!"}
+
+    
+    while (scalar(@cmd_buffer) > 0) {
+    	my$dt = "";
+    	my @socket_record_list = split('\n', shift(@cmd_buffer));
+    	while (scalar (@socket_record_list)) {
+	    	my $socket_stream_record = shift (@socket_record_list);
+	    	if (!defined($socket_stream_record) || ($socket_stream_record eq "") ) {
+	    		continue;
+	    	}
+	    	
+		    my $ret0 = eval {$dt=gunzip($socket_stream_record);1};
+		    unless ($ret0 && defined($dt)) {
+#		    	dropClient($c);
+		    	die  "Error to decode input data! $@";
+		    }
+		    
+		    logg "processClientReq: read_from queue:$dt";
+		    
+		    my $ret1 = eval{
+		    	$clientBuf{$c}[0]->incr_parse($dt);1
+		    };
+		    unless ($ret1) {
+		        my$msg="wrong json <$dt>: $@";
+		        chomp($msg);
+		        $msg=~s/\n/\\n/g;
+#		        dropClient($c);
+		        die $msg;
+		    }
+		
+		    my$obj;
+		    my$ee=eval{$obj=$clientBuf{$c}[0]->incr_parse();1};
+		    unless($ee)
+		    {
+		        my$msg="wrong json <$dt>: $@";
+		        chomp($msg);
+		        $msg=~s/\n/\\n/g;
+#		        dropClient($c);
+		        die $msg;
+		    }
+		    
+		    my$pe=eval{process($c,$obj);1};
+		    unless($pe)
+		    {
+		        my$msg="processing fail <$dt>: $@";
+		        chomp($msg);
+		        $msg=~s/\n/\\n/g;
+#		        dropClient($c);
+		        die $msg;
+		    }
+    	}
+    }
+    
+#    if(length($clientBuf{$c}[1]))
+#        {
+#                EPW::setFDH($c,undef,\&sendReply,\&clientErr,undef); #     
+#                return
+#                
+#        }
+}
+
+=cut
 
 sub processClientReq
 {
     my($c)=@_;
-    my$dt;
-    my$rv=sysread($c,$dt,4096);
-    if(defined($rv) && $rv==0)
-    {
-        if(length $clientBuf{$c}[1])
-        {
-                EPW::setFDH($c,undef,\&sendTo,\&clientErr,undef);
-        }else
-        {
-            dropClient($c);
-        }
-        return
-    }
-    if((!defined($rv) && $!!=EAGAIN))
-    {
-        dropClient($c);
-    }
-    $clientBuf{$c}[0]->incr_parse($dt);
 
-    my$obj;
-    my$ee=eval{$obj=$clientBuf{$c}[0]->incr_parse();1};
-    unless($ee)
-    {
-        my$msg="wrong json <$dt>: $@";
-        chomp($msg);
-        $msg=~s/\n/\\n/g;
-        logg $msg;
-        dropClient($c);
-        last
-    }
-    my$pe=eval{process($c,$obj);1};
-    unless($pe)
-    {
-        my$msg="processing fail <$dt>: $@";
-        chomp($msg);
-        $msg=~s/\n/\\n/g;
-        logg $msg;
-        dropClient($c);
-    }
+    my $read_buffer = "";
+
+    my $recv_size = sysread($c,$read_buffer,4096);
+
+    	if ( (!defined($recv_size) ) || ($recv_size==0) ||  ($read_buffer eq "") ) { die  "Error Not input data!"}   # {dropClient($c); die  "Error Not input data!"}
+    	logg "recv_size: $recv_size read_buffer:$read_buffer";
+
+    	my$dt = "";
+#    	my $ret0 = eval {$dt=gunzip($read_buffer);1};
+	   	my $ret0 = eval {$dt=$read_buffer;1};
+
+		unless ($ret0) {
+			dropClient($c);
+			die  "Error to decode input data:$dt! $@";
+		}
+
+    	my @socket_record_list = split('\n', $dt);
+    	while (scalar (@socket_record_list) > 0) {
+	    	my $socket_stream_record = shift (@socket_record_list);
+	    	unless (defined($socket_stream_record) && ($socket_stream_record ne "") ) {
+	    		continue;
+	    	}
+	    	
+		    
+		    logg "processClientReq: read_from queue:$socket_stream_record";
+		    
+		    my $ret1 = eval{
+		    	$clientBuf{$c}[0]->incr_parse($socket_stream_record);1
+		    };
+		    unless ($ret1) {
+		        my$msg="wrong json <$socket_stream_record>: $@";
+		        chomp($msg);
+		        $msg=~s/\n/\\n/g;
+#		        dropClient($c);
+		        die $msg;
+		    }
+		
+		    my$obj;
+		    my$ee=eval{$obj=$clientBuf{$c}[0]->incr_parse();1};
+		    unless($ee)
+		    {
+		        my$msg="wrong json <$socket_stream_record>: $@";
+		        chomp($msg);
+		        $msg=~s/\n/\\n/g;
+#		        dropClient($c);
+		        die $msg;
+		    }
+		    
+		    my$pe=eval{process($c,$obj);1};
+		    unless($pe)
+		    {
+		        my$msg="processing fail <$socket_stream_record>: $@";
+		        chomp($msg);
+		        $msg=~s/\n/\\n/g;
+#		        dropClient($c);
+		        die $msg;
+		    }
+    	}
+    
+#    if(length($clientBuf{$c}[1]))
+#        {
+#                EPW::setFDH($c,undef,\&sendReply,\&clientErr,undef); #     
+#                return
+#                
+#        }
+    
+
+    
 }
+
+
+
+
 
 sub sendReply
 {
     my($c)=@_;
-    my$bytes=send$c,$clientBuf{$c}[1],0;
-    if(length($clientBuf{$c}[1])==$bytes)
-    {
-        $clientBuf{$c}[1]='';
-        EPW::setFDH($c,\&processClientReq,undef,\&clientErr,undef)
-    }else
-    {
-        $clientBuf{$c}[1]=substr$clientBuf{$c}[1],$bytes
+    
+    if(length($clientBuf{$c}[1])) {
+    
+	    my$bytes=send ($c,$clientBuf{$c}[1],0);
+
+		if (defined($bytes) && ($bytes>0) )  {
+		       logg "sendReply>$bytes";
+		    if( (length($clientBuf{$c}[1])==$bytes) || ($bytes == 0) )
+		    {
+		    	send  ($c,"\r\n",0);
+		        $clientBuf{$c}[1]="";
+		        EPW::setFDH($c,\&processClientReq,undef,\&clientErr,undef);
+		    }else
+		    {
+		        $clientBuf{$c}[1]=substr($clientBuf{$c}[1],$bytes);
+		        EPW::setFDH($c,undef,\&sendReply,\&clientErr,undef);
+		    }
+		} else {
+			dropClient($c);
+			die "Socket close!";
+		}
+	
+    } else {
+    	EPW::setFDH($c,\&processClientReq,undef,\&clientErr,undef);
     }
 }
 
 sub reply
 {
    my($c,$obj)=@_;
-   my$dt=encode_json($obj);
+   my $ret_str = encode_json($obj);
+#   my$dt=gzip ($ret_str);
+   my$dt= $ret_str;
    my$pref=$$obj{ans};
-   logg ">c#".fileno($c)."[$pref]: $dt";
-   $dt.="\r\n";
-   if(length($clientBuf{$c}[1]))
-   {
-        $clientBuf{$c}[1].=$dt;
-   }else
-   {
-        my$bytes=send$c,$dt,0;
-        if($bytes<length$dt)
-        {
-            $clientBuf{$c}[1]=$dt;
-            EPW::setFDH($c,\&processClientReq,\&sendReply,\&clientErr,undef);
-        }
-   }
+   logg ">c#".fileno($c)."[$pref]: $ret_str";
+
+#   if(length($clientBuf{$c}[1]))
+#   {
+#        $clientBuf{$c}[1].=$dt;
+#        logg "==> Add to send buffer:".$ret_str;
+#   }
+#   else
+#   {
+        my $bytes=send ($c,$dt, 0 );  # MSG_OOB
+		if (defined($bytes) && ($bytes > 0) ) {
+	        logg "==> Send byte:" . $bytes;
+	        if($bytes<length($dt))
+	        {
+	        	$clientBuf{$c}[1]=substr($dt,$bytes);
+		        EPW::setFDH($c,\&processClientReq,\&sendReply,\&clientErr,undef);
+	#            $clientBuf{$c}[1]=$dt;
+	#            EPW::setFDH($c,undef,\&sendReply,\&clientErr,undef); # 
+	        } else {
+	        	send  ($c,"\r\n",0);
+	        	$clientBuf{$c}[1]=''; 
+	        	EPW::setFDH($c,\&processClientReq,undef,\&clientErr,undef);
+	        }
+		}
+		else {
+			dropClient($c);
+			die "Socket close!";
+		}
+#   }
+   
+#    EPW::setFDH($c,\&processClientReq, undef,\&clientErr,undef); #
 }
 
 sub process
 {
     my($c,$obj)=@_;
+    
+    if (!defined($obj) ) {
+    	dropClient($c);
+    	die "Error Not intut data fo process!!!";
+    }
+    
     my$pref=$$obj{req};
-    logg "<c#".fileno($c)."[$pref]: ".encode_json($obj);
+    eval { logg "<c#".fileno($c)."[$pref]: ".encode_json($obj);    };
+    if ($@) {
+    	die "Error log process args: $@";
+    }
+
     my($type)=$$obj{req};
     if($type eq 'verify')
     {
@@ -147,6 +341,7 @@ sub process
         dummyClosed($c,$billId);
     }else
     {
+    	dropClient($c);
         die "wrong type $type";
     }
 }
@@ -221,10 +416,14 @@ sub dropClient
 {
     my$c=shift;
     delete($clientBuf{$c});
-    logg "-client #".fileno($c);
     EPW::clearFDH($c);
-    shutdown($c,2);
-    close $c;
+    
+    eval {
+    	logg "-client #".fileno($c);
+	    shutdown($c,2);
+	    close $c;
+    };
+    logg " ================================================================================================ " 
 }
 
 sub verify_onFile
@@ -264,6 +463,6 @@ select+((select O),$|=1)[0];
 
 
 $S=new IO::Socket::INET(Listen=>3,ReuseAddr=>1,LocalPort=>1212) or die "bindErr: $!";
-EPW::setFDH($S,\&newClient,undef,undef);
+EPW::setFDH($S,\&newClient,\&ServerErr,undef);
 EPW::loo();
 

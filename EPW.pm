@@ -38,7 +38,7 @@ sub setFDH#(*&&&;$)
     my($handle,$readCB,$writeCB,$errCB,$tag)=@_;
 
     croak('handle should be opened stream or FD')
-        unless openhandle$handle || looks_like_number$handle;
+        unless openhandle($handle) || looks_like_number($handle);
     croak("wrong CB, should be code reference or undef")
         if grep {defined $_ && (reftype($_)//'') ne 'CODE'}
             ($readCB,$writeCB,$errCB);
@@ -121,10 +121,12 @@ sub loo()
     while(!$shouldStop)
     {
         my$delay=$scheduler[0]? (1000*($scheduler[0][0] -time())) : -1;
+        print "Waite deley: $delay";
         my$rv=epoll_wait($EPoll,15,$delay);
         for my$h(@$rv)
         {
             my($fd,$mask)=@$h;
+
             my$handle=$fd2h{$fd};
             for my$kv(  [EPOLLERR,2],
                         [EPOLLIN|EPOLLHUP,0],
@@ -133,12 +135,12 @@ sub loo()
                 if($mask & $$kv[0])
                 {
                     $mask=0 if($$kv[0]==EPOLLERR);
+                    
                     next unless $h2cb{$handle};
                     my$cb=$h2cb{$handle}[$$kv[1]];
                     unless(eval
                     {
-                        &$cb($handle,$h2tag{$handle})
-                            if $cb;
+                        &$cb($handle,$h2tag{$handle}) if $cb;
                         1
                     })
                     {
