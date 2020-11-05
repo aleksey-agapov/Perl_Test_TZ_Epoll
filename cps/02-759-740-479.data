@@ -1,0 +1,14 @@
+#Created at 1432792346 by ClKT v.:3.4.18 <03/04/2015> ($Rev: 117 $)
+
+@Coupon[registered]:[02-759-740-479]Begin
+req.time=1432792346
+req.ip=192.168.0.250
+aId=action-6
+time=1432792227
+id=2
+code=02-759-740-479
+weight=1
+check.id=UD3UQ-2APD8N
+rId=disc
+@Coupon[registered]:[02-759-740-479]End.
+@Coupon[printed]:[192.168.0.250]1432792227

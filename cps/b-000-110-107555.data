@@ -1,0 +1,11 @@
+#Created at 1432724534 by ClKT v.:3.4.18 <03/04/2015> ($Rev: 117 $)
+
+@Coupon[registered]:[b-000-110-107555]Begin
+req.time=1432724534
+req.ip=192.168.142.116
+aId=action-6
+time=1432723424
+id=1
+code=b-000-110-107555
+weight=1
+@Coupon[registered]:[b-000-110-107555]End.

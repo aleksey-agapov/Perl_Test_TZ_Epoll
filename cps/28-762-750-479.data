@@ -1,0 +1,14 @@
+#Created at 1432882642 by ClKT v.:3.4.18 <03/04/2015> ($Rev: 117 $)
+
+@Coupon[registered]:[28-762-750-479]Begin
+req.time=1432882642
+req.ip=192.168.0.250
+aId=action-171
+time=1432882519
+id=3
+code=28-762-750-479
+weight=1
+check.id=UD3UQ-2ASJKZ
+rId=give_coupon_1
+@Coupon[registered]:[28-762-750-479]End.
+@Coupon[error]:[192.168.0.250]Ошибка печати: /var/spool/kkt//c/coupon-171-1.jpg: Нет такого файла или каталога

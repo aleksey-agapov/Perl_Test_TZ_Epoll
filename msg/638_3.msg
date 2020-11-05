@@ -1,0 +1,1 @@
+{"req":"close","id":"3925_3_638_136431","time":1461531891,"items":[{"num":1,"code":"1033980","barcode":"40084725","amount":1.0,"cost":36.0,"price":38.0,"priceMin":0.0,"exclude":"0","discount":10.93},{"num":2,"code":"1229684","barcode":"4620006000925","amount":1.0,"cost":37.0,"price":39.8,"priceMin":0.0,"exclude":"0","discount":11.44}],"coupons":["cl02759740479"]}
