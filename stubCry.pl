@@ -37,8 +37,8 @@ GetOptions(
 
 sub logg
 {
-        print localtime()." @_";
-#        print O localtime()." @_";
+#        print localtime()." @_";
+        print O localtime()." @_";
 }
 
 
